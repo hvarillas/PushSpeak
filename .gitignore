@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# uv
+.python-version
+uv.lock
+
+# Project-specific
+*.wav
+whisper.cpp/
+whisper-cli
+
+# Documentation
+*.md
+!README.md

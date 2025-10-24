@@ -1,0 +1,326 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audio Recorder</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: transparent;
+      }
+      body {
+        opacity: 0;
+        transition: opacity 500ms ease-in-out;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+      }
+      #transcript {
+        position: absolute;
+        inset: 8px 12px;
+        color: #e8e8e8;
+        font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        pointer-events: none; /* avoid focus / interaction */
+        opacity: 0.96;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+    </style>
+    <script>
+      let canvas,
+        ctx,
+        barsPrev = null,
+        weights = null;
+      const BARS = 64;
+      const HEIGHT_MULT = 2.2;
+      function resize() {
+        if (!canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(canvas.clientWidth * dpr);
+        canvas.height = Math.floor(canvas.clientHeight * dpr);
+        if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      function ensureBarBuffers(n) {
+        if (!barsPrev || barsPrev.length !== n) barsPrev = new Float32Array(n);
+      }
+      function ensureWeights(n) {
+        if (weights && weights.length === n) return;
+        const freeze = Math.max(2, Math.round(n * 0.04));
+        weights = new Float32Array(n);
+        const inner = Math.max(1, n - freeze * 2);
+        for (let i = 0; i < n; i++) {
+          let w = 0;
+          if (i >= freeze && i < n - freeze) {
+            const t = (i - freeze) / (inner - 1);
+            w = Math.sin(Math.PI * t);
+          }
+          weights[i] = w;
+        }
+      }
+      function resampleBars(data, n) {
+        const out = new Float32Array(n);
+        if (!data || !data.length) return out;
+        const L = data.length;
+        const step = L / n;
+        for (let i = 0; i < n; i++) {
+          const s = Math.floor(i * step);
+          const e = Math.min(L, Math.floor((i + 1) * step));
+          let m = 0;
+          for (let k = s; k < e; k++) {
+            const v = Math.abs(data[k]) / 32768.0;
+            if (v > m) m = v;
+          }
+          out[i] = Math.pow(m, 0.6);
+        }
+        return out;
+      }
+      // Color helpers for animated gradient
+      function hexToRgb(hex) {
+        const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return m ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) } : null;
+      }
+      function rgbToHex(r, g, b) {
+        const c = (x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0');
+        return `#${c(r)}${c(g)}${c(b)}`;
+      }
+      function mixHex(c1, c2, t) {
+        const a = hexToRgb(c1), b = hexToRgb(c2);
+        if (!a || !b) return c1;
+        return rgbToHex(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t);
+      }
+      function darkenColor(hex, factor) {
+        const rgb = hexToRgb(hex);
+        if (!rgb) return hex;
+        return rgbToHex(rgb.r * (1 - factor), rgb.g * (1 - factor), rgb.b * (1 - factor));
+      }
+      function lightenColor(hex, factor) {
+        const rgb = hexToRgb(hex);
+        if (!rgb) return hex;
+        return rgbToHex(
+          rgb.r + (255 - rgb.r) * factor,
+          rgb.g + (255 - rgb.g) * factor, 
+          rgb.b + (255 - rgb.b) * factor
+        );
+      }
+      function drawBars(values) {
+        const w = canvas.clientWidth,
+          h = canvas.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+        ensureBarBuffers(values.length);
+        ensureWeights(values.length);
+        const mid = h / 2,
+          scale = mid * 0.85; // Reduced from 0.92 to make room for glow
+        const space = w / values.length;
+        const barW = Math.max(3, space * 0.22);
+        ctx.lineCap = "round";
+        ctx.lineWidth = barW;
+        
+        // Animated radial (center→edges) color wave with balanced mix
+        const tsec = performance.now() / 1000;
+        const waveSpeed = 1.8; // cycles per second
+        const r = (tsec * waveSpeed) % 1; // moving radius in [0,1]
+        const band = 0.35; // wider band for more balanced presence
+        const colEdge = "#10b981"; // green edge color
+        const colCenter = "#a78bfa"; // violet center color
+        
+        // Draw glow effect first (behind bars)
+        for (let i = 0; i < values.length; i++) {
+          const BASE = 0.04;
+          const target = BASE + weights[i] * values[i];
+          let c = barsPrev[i] || 0;
+          const attack = 0.65,
+            release = 0.2;
+          c =
+            target > c
+              ? c + (target - c) * attack
+              : c * (1 - release) + target * release;
+          barsPrev[i] = c;
+          
+          // distance from horizontal center (0 at center, 1 at edges)
+          const pos = (values.length <= 1) ? 0.5 : (i / (values.length - 1));
+          const d = Math.abs(pos - 0.5) / 0.5;
+          // base gradient favors center (violet) over edges (green)
+          const base = 1 - d; // 1 at center, 0 at edges (integrates ~0.5 across width)
+          // triangular wave around moving radius r
+          const wave = Math.max(0, 1 - Math.abs(d - r) / band);
+          // balanced mix with custom weights: 0.6 base, 0.4 wave
+          const tMix = Math.max(0, Math.min(1, 0.6 * base + 0.4 * wave));
+          const color = mixHex(colEdge, colCenter, tMix);
+          
+          const half = Math.min(
+            mid - 16, // More margin for larger glow and 3D effect containment
+            Math.max(1.5, c * scale * HEIGHT_MULT),
+          );
+          const x = i * space + space / 2;
+          
+          // Draw glow layers (more subtle opacity)
+          const glowIntensity = Math.min(1, c * 2.5); // Reduced from 3 to 2.5
+          if (glowIntensity > 0.08) { // Raised threshold to reduce glow activation
+            const glowSteps = 3; // Reduced from 4 to 3 layers
+            const maxGlowRadius = Math.min(10, barW * 2); // Reduced radius
+            
+            for (let g = glowSteps; g >= 1; g--) {
+              const glowRadius = (maxGlowRadius * g) / glowSteps;
+              const glowOpacity = Math.min(0.5, (glowIntensity * 0.5) / Math.pow(g, 0.8)); // Reduced opacity significantly
+              
+              ctx.save();
+              ctx.globalAlpha = glowOpacity;
+              ctx.shadowColor = color;
+              ctx.shadowBlur = glowRadius;
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+              ctx.lineWidth = Math.max(barW, barW + glowRadius * 0.2); // Reduced expansion
+              ctx.strokeStyle = color;
+              
+              ctx.beginPath();
+              ctx.moveTo(x, mid - half);
+              ctx.lineTo(x, mid + half);
+              ctx.stroke();
+              ctx.restore();
+            }
+            
+            // Subtle inner glow
+            ctx.save();
+            ctx.globalAlpha = Math.min(0.3, glowIntensity * 0.4); // Much more subtle
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 2; // Reduced from 3 to 2
+            ctx.lineWidth = barW * 1.1; // Reduced from 1.2
+            ctx.strokeStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x, mid - half);
+            ctx.lineTo(x, mid + half);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+        
+        // Draw 3D bars with depth and highlights
+        for (let i = 0; i < values.length; i++) {
+          const c = barsPrev[i] || 0;
+          const pos = (values.length <= 1) ? 0.5 : (i / (values.length - 1));
+          const d = Math.abs(pos - 0.5) / 0.5;
+          const base = 1 - d;
+          const wave = Math.max(0, 1 - Math.abs(d - r) / band);
+          const tMix = Math.max(0, Math.min(1, 0.6 * base + 0.4 * wave));
+          
+          const baseColor = mixHex(colEdge, colCenter, tMix);
+          const half = Math.min(
+            mid - 16, // Increased margin for 3D effect
+            Math.max(1.5, c * scale * HEIGHT_MULT),
+          );
+          const x = i * space + space / 2;
+          
+          // 3D depth offset (right and down for depth illusion)
+          const depthOffset = Math.max(1, barW * 0.3);
+          
+          // 1. Draw shadow/depth layer (darker, offset)
+          const shadowColor = darkenColor(baseColor, 0.4);
+          ctx.strokeStyle = shadowColor;
+          ctx.lineWidth = barW;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(x + depthOffset, mid - half + depthOffset);
+          ctx.lineTo(x + depthOffset, mid + half + depthOffset);
+          ctx.stroke();
+          
+          // 2. Draw main bar body
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = barW;
+          ctx.beginPath();
+          ctx.moveTo(x, mid - half);
+          ctx.lineTo(x, mid + half);
+          ctx.stroke();
+          
+          // 3. Draw subtle highlight on left side (reduced brightness)
+          const highlightColor = lightenColor(baseColor, 0.15); // Reduced from 0.3 to 0.15
+          ctx.strokeStyle = highlightColor;
+          ctx.lineWidth = Math.max(1, barW * 0.25); // Reduced from 0.4 to 0.25
+          ctx.beginPath();
+          ctx.moveTo(x - barW * 0.25, mid - half);
+          ctx.lineTo(x - barW * 0.25, mid + half);
+          ctx.stroke();
+          
+          // 4. Draw subtle center highlight (much more subdued)
+          const centerHighlight = lightenColor(baseColor, 0.25); // Reduced from 0.6 to 0.25
+          ctx.strokeStyle = centerHighlight;
+          ctx.lineWidth = Math.max(1, barW * 0.08); // Reduced from 0.15 to 0.08
+          ctx.beginPath();
+          ctx.moveTo(x, mid - half * 0.6); // Reduced coverage from 0.8 to 0.6
+          ctx.lineTo(x, mid + half * 0.6);
+          ctx.stroke();
+        }
+      }
+      function drawIdle(t) {
+        ensureWeights(BARS);
+        const vals = new Float32Array(BARS);
+        for (let i = 0; i < BARS; i++)
+          vals[i] = 0.12 + 0.06 * Math.sin(t * 2 + i * 0.2); // Reduced values to minimize glow in idle
+        drawBars(vals);
+      }
+      function drawWaveform(data) {
+        if (!data || !data.length) {
+          drawIdle(performance.now() / 1000);
+          return;
+        }
+        const half = Math.floor(BARS / 2);
+        const right = resampleBars(data, half);
+        const vals = new Float32Array(BARS);
+        for (let i = 0; i < half; i++) {
+          vals[half + i] = right[i];
+          vals[half - 1 - i] = right[i];
+        }
+        drawBars(vals);
+      }
+      async function loop() {
+        const api = window.pywebview && window.pywebview.api;
+        if (!api) {
+          requestAnimationFrame(loop);
+          return;
+        }
+        try {
+          const st = await api.get_state();
+          if (!st.grabando) {
+            const w = canvas.clientWidth,
+              h = canvas.clientHeight;
+            ctx.clearRect(0, 0, w, h);
+            document.getElementById('transcript').textContent = '';
+          } else {
+            drawWaveform(st.data);
+            if (st.text) {
+              document.getElementById('transcript').textContent = st.text;
+            }
+          }
+        } catch (e) {}
+        setTimeout(loop, 33);
+      }
+      function fadeIn() {
+        document.body.style.opacity = "1";
+      }
+      function fadeOut() {
+        document.body.style.opacity = "0";
+      }
+      function bind() {
+        canvas = document.getElementById("wave");
+        ctx = canvas.getContext("2d");
+        resize();
+        window.addEventListener("resize", resize);
+        loop();
+      }
+      document.addEventListener("DOMContentLoaded", bind);
+    </script>
+  </head>
+  <body class="pywebview-drag-region">
+    <canvas id="wave"></canvas>
+    <div id="transcript"></div>
+  </body>
+</html>
