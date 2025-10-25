@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Tuple
 
-from qtpy import QtWidgets, QtGui
+from qtpy import QtWidgets, QtGui, QtCore
 
 
 def _combo_to_str(combo: set[str]) -> str:
@@ -34,7 +35,15 @@ class SettingsDialog(QtWidgets.QDialog):
                  model_path: str = "",
                  language: str = "es",
                  hotkey_enabled: bool = True):
-        super().__init__(parent)
+        # Evitar conflictos con pywebview: no pasar parent si causa problemas
+        logging.debug("[SETTINGS] Inicializando diálogo de configuración")
+        try:
+            super().__init__(parent)
+            logging.debug("[SETTINGS] Diálogo creado con parent")
+        except (TypeError, RuntimeError) as e:
+            logging.warning(f"[SETTINGS] Error con parent, usando None: {e}")
+            super().__init__(None)
+        
         self.setWindowTitle("Configuración")
         self.setModal(True)
 
@@ -55,13 +64,18 @@ class SettingsDialog(QtWidgets.QDialog):
         self.ed_combo.setPlaceholderText("ctrl+shift")
         form.addRow("Atajo (p.ej. ctrl+shift)", self.ed_combo)
 
-        # Model file chooser
+        # Model file chooser (manual entry due to pywebview conflicts)
         path_layout = QtWidgets.QHBoxLayout()
         self.ed_model = QtWidgets.QLineEdit(self._model_path)
-        btn_browse = QtWidgets.QPushButton("Examinar…")
-        btn_browse.clicked.connect(self._browse_model)
+        self.ed_model.setPlaceholderText("~/.models/ggml-small.bin")
+        
+        # Botón de ayuda en lugar de examinar (evita conflictos con pywebview)
+        btn_help = QtWidgets.QPushButton("📁 Ayuda")
+        btn_help.setToolTip("Ver instrucciones para ubicar el modelo")
+        btn_help.clicked.connect(self._show_model_help)
+        
         path_layout.addWidget(self.ed_model)
-        path_layout.addWidget(btn_browse)
+        path_layout.addWidget(btn_help)
         path_w = QtWidgets.QWidget()
         path_w.setLayout(path_layout)
         form.addRow("Modelo Whisper", path_w)
@@ -88,21 +102,63 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
 
-    def _browse_model(self):
-        dlg = QtWidgets.QFileDialog(self, "Seleccionar modelo de Whisper")
-        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
-        # QtPy compatibility: exec_ on Qt5, exec on Qt6
-        ok = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
-        if ok:
-            files = dlg.selectedFiles()
-            if files:
-                self.ed_model.setText(files[0])
+    def _show_model_help(self):
+        """Muestra ayuda para ubicar y descargar modelos"""
+        logging.debug("[SETTINGS] Mostrando ayuda de modelos")
+        import os
+        
+        # Verificar si existe el directorio de modelos
+        models_dir = os.path.expanduser("~/.models")
+        models_exist = os.path.exists(models_dir)
+        
+        # Listar modelos disponibles si el directorio existe
+        available_models = []
+        if models_exist:
+            try:
+                files = [f for f in os.listdir(models_dir) if f.endswith(('.bin', '.gguf'))]
+                available_models = files[:5]  # Máximo 5
+            except Exception:
+                pass
+        
+        # Construir mensaje
+        msg = "📁 <b>Ubicación del Modelo de Whisper</b><br><br>"
+        
+        if available_models:
+            msg += "✅ <b>Modelos encontrados en ~/.models:</b><br>"
+            for model in available_models:
+                full_path = os.path.join(models_dir, model)
+                msg += f"  • <code>~/.models/{model}</code><br>"
+            msg += "<br>💡 <b>Tip:</b> Copia la ruta completa y pégala en el campo de texto.<br><br>"
+        else:
+            msg += "⚠️ <b>No se encontraron modelos en ~/.models</b><br><br>"
+        
+        msg += "<b>Para descargar un modelo:</b><br>"
+        msg += "1. Abre una terminal<br>"
+        msg += "2. Ejecuta:<br>"
+        msg += "<code>cd /mnt/d/develop/own/python/PushSpeak</code><br>"
+        msg += "<code>./scripts/download_model.sh</code><br><br>"
+        
+        msg += "<b>O descarga manualmente:</b><br>"
+        msg += "<code>mkdir -p ~/.models</code><br>"
+        msg += "<code>cd ~/.models</code><br>"
+        msg += "<code>wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin</code><br><br>"
+        
+        msg += "<b>Luego ingresa la ruta:</b><br>"
+        msg += "<code>~/.models/ggml-small.bin</code>"
+        
+        msgbox = QtWidgets.QMessageBox(self)
+        msgbox.setWindowTitle("Ayuda: Modelo de Whisper")
+        msgbox.setTextFormat(QtCore.Qt.RichText)
+        msgbox.setText(msg)
+        msgbox.setIcon(QtWidgets.QMessageBox.Information)
+        msgbox.exec_()
 
     def values(self) -> Tuple[set[str], str, str, bool]:
         combo = _str_to_combo(self.ed_combo.text())
         model = self.ed_model.text().strip()
         lang = (self.cb_lang.currentText() or "es").strip()
         enabled = self.chk_enabled.isChecked()
+        logging.debug(f"[SETTINGS] Valores: combo={combo}, model={model}, lang={lang}, enabled={enabled}")
         return combo, model, lang, enabled
 
     # Provide Qt5-style exec_ for compatibility

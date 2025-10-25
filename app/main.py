@@ -8,7 +8,13 @@ from pathlib import Path
 
 from pynput import keyboard
 
-from app.config import AudioConfig, WhisperConfig, UIConfig, COMBO_RECORD, INSERT_TRAILING
+from app.config import (
+    AudioConfig,
+    WhisperConfig,
+    UIConfig,
+    COMBO_RECORD,
+    INSERT_TRAILING,
+)
 from app.state import AppState
 from app.audio.recorder import Recorder, RecorderConfig
 from app.audio.monitor import LiveMonitor
@@ -27,7 +33,12 @@ All real-time streaming, UI and monitoring dependencies removed from runtime.
 
 def _verificar_ffmpeg() -> bool:
     try:
-        res = subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)
+        res = subprocess.run(
+            ["ffmpeg", "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=3,
+        )
         return res.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -35,18 +46,34 @@ def _verificar_ffmpeg() -> bool:
 
 def _detectar_sistema_audio(cfg: AudioConfig) -> AudioConfig:
     try:
-        res = subprocess.run(["pactl", "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
+        res = subprocess.run(
+            ["pactl", "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2
+        )
         if res.returncode == 0:
-            return AudioConfig(sample_rate=cfg.sample_rate, channels=cfg.channels, codec=cfg.codec,
-                               output_format=cfg.output_format, input_device="default", device_system="pulse")
+            return AudioConfig(
+                sample_rate=cfg.sample_rate,
+                channels=cfg.channels,
+                codec=cfg.codec,
+                output_format=cfg.output_format,
+                input_device="default",
+                device_system="pulse",
+            )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
-    return AudioConfig(sample_rate=cfg.sample_rate, channels=cfg.channels, codec=cfg.codec,
-                       output_format=cfg.output_format, input_device="default", device_system="alsa")
+    return AudioConfig(
+        sample_rate=cfg.sample_rate,
+        channels=cfg.channels,
+        codec=cfg.codec,
+        output_format=cfg.output_format,
+        input_device="default",
+        device_system="alsa",
+    )
 
 
 class HotkeyListener:
-    def __init__(self, on_start, on_stop, *, combo: set[str] | None = None, enabled: bool = True):
+    def __init__(
+        self, on_start, on_stop, *, combo: set[str] | None = None, enabled: bool = True
+    ):
         self.on_start = on_start
         self.on_stop = on_stop
         self._pressed: set[str] = set()
@@ -60,18 +87,18 @@ class HotkeyListener:
     def _on_press(self, key):
         if not self._enabled:
             return
-        name = getattr(key, 'char', None)
+        name = getattr(key, "char", None)
         if name:
             name = name.lower()
         else:
-            name = getattr(key, 'name', str(key)).lower()
+            name = getattr(key, "name", str(key)).lower()
         # normalize left/right variants
-        if name and name.startswith('ctrl'):
-            name = 'ctrl'
-        if name and name.startswith('shift'):
-            name = 'shift'
-        if name and name.startswith('alt'):
-            name = 'alt'
+        if name and name.startswith("ctrl"):
+            name = "ctrl"
+        if name and name.startswith("shift"):
+            name = "shift"
+        if name and name.startswith("alt"):
+            name = "alt"
         if name in self._combo and len(self._pressed) < len(self._combo):
             self._pressed.add(name)
             if not self._active and self._pressed == set(self._combo):
@@ -84,18 +111,18 @@ class HotkeyListener:
             return False
         if not self._enabled:
             return
-        name = getattr(key, 'char', None)
+        name = getattr(key, "char", None)
         if name:
             name = name.lower()
         else:
-            name = getattr(key, 'name', str(key)).lower()
+            name = getattr(key, "name", str(key)).lower()
         # normalize left/right variants
-        if name and name.startswith('ctrl'):
-            name = 'ctrl'
-        if name and name.startswith('shift'):
-            name = 'shift'
-        if name and name.startswith('alt'):
-            name = 'alt'
+        if name and name.startswith("ctrl"):
+            name = "ctrl"
+        if name and name.startswith("shift"):
+            name = "shift"
+        if name and name.startswith("alt"):
+            name = "alt"
         if name in self._pressed:
             self._pressed.discard(name)
         if self._active and self._pressed != set(self._combo):
@@ -110,7 +137,9 @@ class HotkeyListener:
         except Exception:
             pass
         try:
-            self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+            self._listener = keyboard.Listener(
+                on_press=self._on_press, on_release=self._on_release
+            )
             self._listener.daemon = True
             self._listener.start()
         except Exception:
@@ -167,7 +196,7 @@ class HotkeyListener:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
     if not _verificar_ffmpeg():
         logging.error("ffmpeg no esta instalado")
         return 1
@@ -179,15 +208,29 @@ def main() -> int:
     # Validate CLI availability (non-RT mode)
     if whisper_cfg.auto_transcribe:
         if not verify_whisper():
-            logging.warning("whisper-cli no esta disponible. Transcripcion deshabilitada.")
-            whisper_cfg = WhisperConfig(model_path=whisper_cfg.model_path, language=whisper_cfg.language, auto_transcribe=False)
+            logging.warning(
+                "whisper-cli no esta disponible. Transcripcion deshabilitada."
+            )
+            whisper_cfg = WhisperConfig(
+                model_path=whisper_cfg.model_path,
+                language=whisper_cfg.language,
+                auto_transcribe=False,
+            )
 
     state = AppState(recording=False, audio_buffer=[], current_file=None)
 
     # UI window (wavebar)
     template = Path(__file__).resolve().parents[1] / "templates" / "wavebar.html"
-    win = UIWindow(width=ui_cfg.width, height=ui_cfg.height, template_path=template,
-                   get_state=lambda: {"grabando": state.recording, "data": state.audio_buffer or [], "text": state.rt_text})
+    win = UIWindow(
+        width=ui_cfg.width,
+        height=ui_cfg.height,
+        template_path=template,
+        get_state=lambda: {
+            "grabando": state.recording,
+            "data": state.audio_buffer or [],
+            "text": state.rt_text,
+        },
+    )
     window = win.create()
     state.window = window
 
@@ -195,81 +238,148 @@ def main() -> int:
     try:
         if whisper_cfg.rt_backend == "whisper_stream":
             from app.transcribe import ensure_fw_model_preloaded
-            ensure_fw_model_preloaded(whisper_cfg.stream_model, whisper_cfg.stream_device, whisper_cfg.stream_compute_type)
+
+            ensure_fw_model_preloaded(
+                whisper_cfg.stream_model,
+                whisper_cfg.stream_device,
+                whisper_cfg.stream_compute_type,
+            )
     except Exception:
         pass
 
     # Recorder and live monitor (visuals only)
-    recorder = Recorder(RecorderConfig(device_system=audio_cfg.device_system, input_device=audio_cfg.input_device,
-                                       sample_rate=audio_cfg.sample_rate, channels=audio_cfg.channels,
-                                       codec=audio_cfg.codec, output_format=audio_cfg.output_format))
-    monitor = LiveMonitor(audio_cfg.sample_rate, on_data=lambda buf: setattr(state, 'audio_buffer', buf), on_raw=None)
+    recorder = Recorder(
+        RecorderConfig(
+            device_system=audio_cfg.device_system,
+            input_device=audio_cfg.input_device,
+            sample_rate=audio_cfg.sample_rate,
+            channels=audio_cfg.channels,
+            codec=audio_cfg.codec,
+            output_format=audio_cfg.output_format,
+        )
+    )
+    monitor = LiveMonitor(
+        audio_cfg.sample_rate,
+        on_data=lambda buf: setattr(state, "audio_buffer", buf),
+        on_raw=None,
+    )
 
     def start_recording():
         if state.recording:
+            logging.debug("[MAIN] start_recording() llamado pero ya está grabando")
             return
+        logging.info("[MAIN] === INICIANDO GRABACIÓN ===")
         try:
             # Capture current focused window (X11) before showing UI
             state.active_window_id = get_active_window()
+            logging.debug(f"[MAIN] Ventana activa capturada: {state.active_window_id}")
+            
             state.current_file = recorder.start()
+            logging.debug(f"[MAIN] Archivo de grabación: {state.current_file}")
+            
             state.recording = True
             state.rt_text = ""
             state.rt_committed = ""
+            
             monitor.start()
+            logging.debug("[MAIN] Monitor de audio iniciado")
+            
             win.bottom_center(margin_bottom=ui_cfg.bottom_margin)
             win.show_with_fade()
+            logging.debug("[MAIN] UI mostrada")
+            
             # Try to restore focus to previously active window (best-effort)
             if state.active_window_id:
-                threading.Timer(0.03, lambda: activate_window(state.active_window_id)).start()
-                threading.Timer(0.15, lambda: activate_window(state.active_window_id)).start()
-            logging.info("[REC] Grabando... Suelta Ctrl+Shift para detener.")
+                threading.Timer(
+                    0.03, lambda: activate_window(state.active_window_id)
+                ).start()
+                threading.Timer(
+                    0.15, lambda: activate_window(state.active_window_id)
+                ).start()
+            logging.info("[MAIN] Grabación activa. Suelta el atajo para detener.")
         except Exception as e:
-            logging.error(f"No se pudo iniciar la grabacion: {e}")
+            logging.error(f"[MAIN] Error al iniciar la grabación: {e}", exc_info=True)
+            state.recording = False
 
     def stop_recording():
         if not state.recording:
+            logging.debug("[MAIN] stop_recording() llamado pero no está grabando")
             return
+        logging.info("[MAIN] === DETENIENDO GRABACIÓN ===")
         try:
             monitor.stop()
+            logging.debug("[MAIN] Monitor de audio detenido")
+            
             saved = recorder.stop()
             state.recording = False
+            
             win.hide_with_fade()
+            logging.debug("[MAIN] UI ocultada")
+            
+            if not saved:
+                logging.error("[MAIN] No se guardó archivo de audio")
+                return
+            
+            logging.info(f"[MAIN] Archivo guardado: {saved}")
+            
             final_text = None
-            if whisper_cfg.auto_transcribe and saved:
-                final_text = transcribe_audio(saved, settings["model_path"], settings["language"])
+            if whisper_cfg.auto_transcribe:
+                logging.info("[MAIN] Iniciando transcripción...")
+                final_text = transcribe_audio(
+                    saved, settings["model_path"], settings["language"]
+                )
+                
                 # Eliminar archivo temporal después de la transcripción
                 try:
                     if os.path.exists(saved):
                         os.remove(saved)
-                except Exception:
-                    pass
+                        logging.debug(f"[MAIN] Archivo temporal eliminado: {saved}")
+                except Exception as e:
+                    logging.warning(f"[MAIN] No se pudo eliminar archivo temporal: {e}")
+            else:
+                logging.info("[MAIN] Transcripción deshabilitada en config")
 
             if final_text:
+                logging.info(f"[MAIN] Texto transcrito: '{final_text[:50]}...' ({len(final_text)} chars)")
                 acc_text = final_text + INSERT_TRAILING
+                
                 if state.active_window_id:
-                    threading.Timer(0.10, lambda: activate_window(state.active_window_id)).start()
-                    threading.Timer(0.35, lambda: activate_window(state.active_window_id)).start()
+                    logging.debug(f"[MAIN] Restaurando foco a ventana: {state.active_window_id}")
+                    threading.Timer(
+                        0.10, lambda: activate_window(state.active_window_id)
+                    ).start()
+                    threading.Timer(
+                        0.35, lambda: activate_window(state.active_window_id)
+                    ).start()
 
                 def _do_insert():
+                    logging.debug("[MAIN] Ejecutando inserción de texto")
                     prev_enabled = False
                     try:
                         prev_enabled = hotkeys.is_enabled()
                         # Temporarily disable hotkey to avoid Ctrl+Shift paste re-triggering recording
                         hotkeys.set_enabled(False)
-                    except Exception:
-                        pass
+                        logging.debug(f"[MAIN] Atajo deshabilitado temporalmente (prev: {prev_enabled})")
+                    except Exception as e:
+                        logging.warning(f"[MAIN] Error deshabilitando atajo: {e}")
                     try:
                         insert_text_at_cursor(acc_text, use_clipboard=True)
                     finally:
                         try:
                             # Restore to previous state after a short delay
-                            threading.Timer(0.4, lambda: hotkeys.set_enabled(prev_enabled)).start()
-                        except Exception:
-                            pass
+                            threading.Timer(
+                                0.4, lambda: hotkeys.set_enabled(prev_enabled)
+                            ).start()
+                            logging.debug(f"[MAIN] Atajo será restaurado a: {prev_enabled}")
+                        except Exception as e:
+                            logging.warning(f"[MAIN] Error restaurando atajo: {e}")
 
                 threading.Timer(0.80, _do_insert).start()
+            else:
+                logging.warning("[MAIN] No se obtuvo texto de la transcripción")
         except Exception as e:
-            logging.error(f"No se pudo detener la grabacion: {e}")
+            logging.error(f"[MAIN] Error al detener la grabación: {e}", exc_info=True)
+            state.recording = False
 
     # Runtime settings
     settings = {
@@ -292,7 +402,12 @@ def main() -> int:
     except Exception:
         pass
 
-    hotkeys = HotkeyListener(on_start=start_recording, on_stop=stop_recording, combo=settings["combo"], enabled=settings["hotkey_enabled"])
+    hotkeys = HotkeyListener(
+        on_start=start_recording,
+        on_stop=stop_recording,
+        combo=settings["combo"],
+        enabled=settings["hotkey_enabled"],
+    )
 
     def handle_sig(sig, frame):
         try:
@@ -307,6 +422,7 @@ def main() -> int:
                 pass
             try:
                 import webview
+
                 for w in list(webview.windows):
                     try:
                         w.destroy()
@@ -324,7 +440,9 @@ def main() -> int:
         pass
 
     logging.info("*** Dictafono ***")
-    logging.info(f"[AUDIO] Sistema: {audio_cfg.device_system} / Dispositivo: {audio_cfg.input_device}")
+    logging.info(
+        f"[AUDIO] Sistema: {audio_cfg.device_system} / Dispositivo: {audio_cfg.input_device}"
+    )
     if whisper_cfg.auto_transcribe:
         logging.info("[AI] Transcripcion al soltar: Activada")
     logging.info("Mantén Ctrl+Shift para grabar. Esc para salir.")
@@ -381,11 +499,13 @@ def main() -> int:
                     act_toggle.toggled.connect(on_toggle)
 
                     def open_settings():
-                        dlg = SettingsDialog(None,
-                                             combo=hotkeys.get_combo(),
-                                             model_path=settings["model_path"],
-                                             language=settings["language"],
-                                             hotkey_enabled=hotkeys.is_enabled())
+                        dlg = SettingsDialog(
+                            None,
+                            combo=hotkeys.get_combo(),
+                            model_path=settings["model_path"],
+                            language=settings["language"],
+                            hotkey_enabled=hotkeys.is_enabled(),
+                        )
                         res = dlg.exec_()
                         if res == QtWidgets.QDialog.Accepted:
                             combo, model, lang, enabled = dlg.values()
@@ -406,8 +526,15 @@ def main() -> int:
                                 # No-op for CLI; if streaming backend active, ensure cached model if applicable
                                 try:
                                     if whisper_cfg.rt_backend == "whisper_stream":
-                                        from app.transcribe import ensure_fw_model_preloaded
-                                        ensure_fw_model_preloaded(whisper_cfg.stream_model, whisper_cfg.stream_device, whisper_cfg.stream_compute_type)
+                                        from app.transcribe import (
+                                            ensure_fw_model_preloaded,
+                                        )
+
+                                        ensure_fw_model_preloaded(
+                                            whisper_cfg.stream_model,
+                                            whisper_cfg.stream_device,
+                                            whisper_cfg.stream_compute_type,
+                                        )
                                 except Exception:
                                     pass
                             if lang:
@@ -438,7 +565,9 @@ def main() -> int:
             builder = _TrayBuilder()
             # Execute in the main Qt thread
             builder.moveToThread(app.thread())
-            QtCore.QMetaObject.invokeMethod(builder, "build", QtCore.Qt.QueuedConnection)
+            QtCore.QMetaObject.invokeMethod(
+                builder, "build", QtCore.Qt.QueuedConnection
+            )
             app._tray_builder = builder  # type: ignore[attr-defined]
         except Exception:
             pass

@@ -8,6 +8,7 @@ import wave
 import time
 import re
 import math
+import logging
 from typing import Optional
 from pathlib import Path
 
@@ -58,11 +59,22 @@ def ensure_fw_model_preloaded(model_size: str, device: str = "auto", compute_typ
 def verify_whisper() -> bool:
     cli = resolve_whisper_cli()
     if not cli:
+        logging.error("[WHISPER] No se encontró whisper-cli")
         return False
+    logging.debug(f"[WHISPER] Verificando whisper-cli: {cli}")
     try:
         resultado = subprocess.run([cli, "-h"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)
-        return resultado.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        if resultado.returncode == 0:
+            logging.info(f"[WHISPER] whisper-cli verificado correctamente: {cli}")
+            return True
+        else:
+            logging.error(f"[WHISPER] whisper-cli retornó código {resultado.returncode}")
+            return False
+    except FileNotFoundError:
+        logging.error(f"[WHISPER] whisper-cli no encontrado: {cli}")
+        return False
+    except subprocess.TimeoutExpired:
+        logging.error(f"[WHISPER] Timeout verificando whisper-cli")
         return False
 
 
@@ -111,11 +123,22 @@ def merge_with_overlap(prev: str, new: str, max_overlap_words: int = 15) -> str:
 
 
 def transcribe_audio(path: str, model: str, language: str, prompt: Optional[str] = None) -> Optional[str]:
+    logging.debug(f"[TRANSCRIBE] Iniciando transcripción de: {path}")
+    
     if not os.path.exists(path):
+        logging.error(f"[TRANSCRIBE] Archivo no existe: {path}")
+        return None
+    
+    file_size = os.path.getsize(path)
+    logging.debug(f"[TRANSCRIBE] Tamaño del archivo: {file_size} bytes")
+    
+    if file_size == 0:
+        logging.error(f"[TRANSCRIBE] Archivo vacío: {path}")
         return None
 
     cli = resolve_whisper_cli()
     if not cli:
+        logging.error("[TRANSCRIBE] whisper-cli no disponible")
         return None
 
     # resolve model path relative to project root if not absolute
@@ -123,8 +146,41 @@ def transcribe_audio(path: str, model: str, language: str, prompt: Optional[str]
         if model and not os.path.isabs(model):
             root = Path(__file__).resolve().parents[1]
             model = str((root / model).resolve())
-    except Exception:
+    except Exception as e:
+        logging.warning(f"[TRANSCRIBE] Error resolviendo ruta del modelo: {e}")
         pass
+    
+    logging.debug(f"[TRANSCRIBE] Modelo: {model}")
+    logging.debug(f"[TRANSCRIBE] Idioma: {language}")
+    
+    if not os.path.exists(model):
+        logging.error(f"[TRANSCRIBE] Modelo no existe: {model}")
+        return None
+    
+    # Validar el archivo del modelo
+    try:
+        model_size = os.path.getsize(model)
+        logging.debug(f"[TRANSCRIBE] Tamaño del modelo: {model_size} bytes ({model_size / 1024 / 1024:.2f} MB)")
+        
+        if model_size < 1024 * 1024:  # menos de 1 MB es sospechoso
+            logging.error(f"[TRANSCRIBE] El modelo parece demasiado pequeño ({model_size} bytes). Puede estar corrupto.")
+            return None
+        
+        # Verificar que es un archivo binario de whisper (magic bytes)
+        with open(model, 'rb') as f:
+            magic = f.read(6)
+            logging.debug(f"[TRANSCRIBE] Magic bytes del modelo: {magic.hex() if magic else 'vacío'}")
+            # Los modelos GGML de whisper.cpp empiezan con 'ggml' o 'ggjt'
+            # Algunos modelos pueden tener variantes (little-endian, etc.)
+            if magic and not (magic.startswith(b'ggml') or magic.startswith(b'ggjt') or magic.startswith(b'lmgg')):
+                logging.warning(f"[TRANSCRIBE] Magic bytes no reconocidos: {magic[:4].hex()}")
+                logging.warning(f"[TRANSCRIBE] Esperado: 'ggml', 'ggjt' o 'lmgg'")
+                logging.warning(f"[TRANSCRIBE] Intentando continuar de todas formas...")
+            else:
+                logging.debug(f"[TRANSCRIBE] Formato del modelo reconocido")
+    except Exception as e:
+        logging.error(f"[TRANSCRIBE] Error validando archivo del modelo: {e}")
+        return None
 
     comando = [
         cli,
@@ -139,18 +195,44 @@ def transcribe_audio(path: str, model: str, language: str, prompt: Optional[str]
     if prompt:
         # keep prompt short (e.g., last 24 words)
         comando += ["--prompt", prompt]
+    
+    logging.debug(f"[TRANSCRIBE] Ejecutando: {' '.join(comando)}")
+    
     try:
         resultado = subprocess.run(
             comando, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=60, text=True
         )
+        
+        logging.debug(f"[TRANSCRIBE] Código de retorno: {resultado.returncode}")
+        
+        if resultado.stderr:
+            logging.debug(f"[TRANSCRIBE] stderr: {resultado.stderr[:500]}")
+        
         if resultado.returncode == 0:
-            text = _clean_text(resultado.stdout.strip())
-            return text or None
-        return None
-    except FileNotFoundError:
+            raw_output = resultado.stdout.strip()
+            logging.debug(f"[TRANSCRIBE] Salida cruda (primeros 200 chars): {raw_output[:200]}")
+            text = _clean_text(raw_output)
+            if text:
+                logging.info(f"[TRANSCRIBE] Transcripción exitosa: {len(text)} caracteres")
+                logging.debug(f"[TRANSCRIBE] Texto: {text[:100]}...")
+                return text
+            else:
+                logging.warning("[TRANSCRIBE] Transcripción vacía después de limpiar")
+                return None
+        else:
+            logging.error(f"[TRANSCRIBE] whisper-cli falló con código {resultado.returncode}")
+            if resultado.stderr:
+                logging.error(f"[TRANSCRIBE] Error: {resultado.stderr[:500]}")
+            return None
+    except FileNotFoundError as e:
+        logging.error(f"[TRANSCRIBE] Comando no encontrado: {e}")
         return None
     except subprocess.TimeoutExpired:
+        logging.error("[TRANSCRIBE] Timeout (>60s) esperando transcripción")
+        return None
+    except Exception as e:
+        logging.error(f"[TRANSCRIBE] Error inesperado: {e}")
         return None
 
 
@@ -165,10 +247,12 @@ def resolve_whisper_cli() -> Optional[str]:
     # env override
     p = os.environ.get("WHISPER_CLI")
     if p and os.path.isfile(p) and os.access(p, os.X_OK):
+        logging.debug(f"[WHISPER] Usando WHISPER_CLI de env: {p}")
         return p
     # PATH
     p2 = shutil.which("whisper-cli")
     if p2:
+        logging.debug(f"[WHISPER] Encontrado whisper-cli en PATH: {p2}")
         return p2
     # local repo candidates
     try:
@@ -181,14 +265,18 @@ def resolve_whisper_cli() -> Optional[str]:
             root / "whisper.cpp" / "bin" / "whisper-cli",
             root / "whisper.cpp" / "bin" / "main",
         ]
+        logging.debug(f"[WHISPER] Buscando en candidatos locales...")
         for c in candidates:
             try:
                 if c.exists() and os.access(str(c), os.X_OK):
+                    logging.debug(f"[WHISPER] Encontrado en: {c}")
                     return str(c)
             except Exception:
                 continue
-    except Exception:
+    except Exception as e:
+        logging.debug(f"[WHISPER] Error buscando candidatos locales: {e}")
         pass
+    logging.warning("[WHISPER] No se encontró whisper-cli en ninguna ubicación")
     return None
 
 
